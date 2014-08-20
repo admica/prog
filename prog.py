@@ -9,9 +9,7 @@ __doc__ = 'Progress'
 import gtk
 import os
 import pango
-from threading import Thread
 import subprocess
-import logging, logging.handlers
 from socket import socketpair, AF_UNIX, SOCK_STREAM
 import gobject
 import datetime
@@ -25,7 +23,7 @@ class Prog(object):
 
     # window dims with details
     WIDTH_BIG = 1024
-    HEIGHT_BIG = 1024
+    HEIGHT_BIG = 900
 
     # seconds to wait after command completion before closing automatically
     WAIT_QUIT = 3
@@ -49,9 +47,17 @@ class Prog(object):
     # socket window chunk size
     PACKET_SIZE = 1024
 
+    # pango font description for progress bar text
+    FONT = 'mono 26'
+
+
     def __init__(self, opts):
         self.running = True
         self.logo = os.path.join(os.getcwd(), 'logo.png')
+
+        # percentages for progress bar output, do not change
+        self.VALUES = range(0,len(self.MARKERS))
+        self.VALUES.reverse()
 
         self._setup_colors()
 
@@ -61,20 +67,25 @@ class Prog(object):
         self.win.set_size_request(self.WIDTH, self.HEIGHT)
         self.win.set_icon(gtk.gdk.pixbuf_new_from_file(self.logo))
 
+        # everything in a vbox
         vbox = gtk.VBox(spacing=1)
         self.win.add(vbox)
 
+        # progress bar in a box
         pbox = gtk.HBox()
         self.pbar = self._setup_pbar()
-        pbox.add(self.pbar)#pack_start(self.pbar, False, False, 55)
+        pbox.add(self.pbar)
 
+        # events frame
         events = self.init_events()
 
+        # button in a box
         bbox = gtk.HBox()
         button = gtk.Button('Details')
         button.connect('released', self.button_cb, events)
         bbox.pack_start(button, False, False, 1)
 
+        # pack
         vbox.pack_start(pbox, False, False, 3)
         vbox.pack_start(bbox, False, False, 1)
 
@@ -84,23 +95,43 @@ class Prog(object):
         # add events after show all to avoid having to individually show all but events
         vbox.pack_start(events)
 
+        # spawn asynchronously
+        gobject.idle_add(self.spawn, opts)
+
+
+    def spawn(self, opts):
+        """setup sockets, gobject watch, and spawn subprocess"""
         # create sockets
         self.pipe_r, pipe_out_pass = socketpair(AF_UNIX, SOCK_STREAM)
         pipe_w, pipe_in_pass = socketpair(AF_UNIX, SOCK_STREAM)
 
-        # spawn subprocess
-        self.p = subprocess.Popen(opts, bufsize=0, stdin=pipe_in_pass, stdout=pipe_out_pass, close_fds=True)
-
-        # watch for subproc output
+        # watch sockets for incoming data
         gobject.io_add_watch(self.pipe_r, gobject.IO_IN|gobject.IO_HUP, self.receiver)
+
+        # wait for gtk main before invoking subprocess
+        while not gtk.main_level():
+            sleep(.05)
+
+        # spawn subprocess
+        self.p = subprocess.Popen(opts, stdin=pipe_in_pass, stdout=pipe_out_pass, close_fds=True)
+
+        return False
 
 
     def button_cb(self, button, events):
         """button click callback"""
+        # show frame and everything inside
         events.show_all()        
+
+        # hide button
+        button.hide()
+
+        # resize gui
         gobject.idle_add(self._resize)
 
+
     def _resize(self):
+        """resize the gui to be used after showing events frame"""
         self.win.set_size_request(self.WIDTH_BIG, self.HEIGHT_BIG)
         self.win.set_position(gtk.WIN_POS_CENTER)
         return False
@@ -114,29 +145,36 @@ class Prog(object):
 
 
     def receiver(self, fd_ignore, condition):
+        """called by gobject idle loop when socket has data to be read"""
         try:
-            raw = self.pipe_r.recv(1024)
+            raw = self.pipe_r.recv(self.PACKET_SIZE)
             if len(raw) == 0:
                 self.running = False
-                if gtk.events_pending:
-                    gtk.main_iteration()
+                gobject.idle_add(self.stayfresh)
                 sleep(self.WAIT_QUIT)
                 self._quit()
 
             # progress if marker in raw
-            for mark in self.MARKERS:
+            for mark, value in zip(self.MARKERS, self.VALUES):
                 if mark in raw:
-                    value = int(mark[:-1])
                     gobject.idle_add(self.pbar_update, mark, value)
                     break
 
             for line in raw.split('\n'):
-                self.events('INFO', raw)
+                lower = line.lower()
+                if 'warning' in lower:
+                    self.events('WARN', raw)
+                elif 'error' in lower:
+                    self.events('ERROR', raw)
+                elif 'critical' in lower:
+                    self.events('CRITICAL', raw)
+                else:
+                    self.events('*', raw)
 
         except Exception as e:
+            print "Receiver failure:", e
             self.running = False
-            if gtk.events_pending:
-                gtk.main_iteration()
+            gobject.idle_add(self.stayfresh)
             sleep(self.WAIT_QUIT)
             self._quit()
 
@@ -176,7 +214,8 @@ class Prog(object):
         pbar.set_orientation(gtk.PROGRESS_LEFT_TO_RIGHT)
         pbar.set_size_request(self.WIDTH, 70)
         pbar.set_fraction(0)
-        pbar.set_text('Initializing...')
+        pbar.set_text('0%')
+        pbar.modify_font(pango.FontDescription(self.FONT))
 
         return pbar
 
@@ -209,7 +248,7 @@ class Prog(object):
 
 
     def _setup_colors(self):
-        # color scheme
+        """color scheme mapping hex colors to human readable names"""
         self.lt_red    = '#ee3333'
         self.lt_orange = '#f0a053'
         self.lt_blue   = '#4090ee'
@@ -245,7 +284,7 @@ class Prog(object):
         tag = tag_table.lookup('*')
         if not tag:
             tag = gtk.TextTag('*')
-        tag.set_property('foreground', self.grey)
+        tag.set_property('foreground', self.white)
         tag.set_property('background', self.black)
         tag.set_property('style', pango.STYLE_NORMAL)
         try:
@@ -256,7 +295,7 @@ class Prog(object):
         tag = tag_table.lookup('INFO')
         if not tag:
             tag = gtk.TextTag('INFO')
-        tag.set_property('foreground', self.white)
+        tag.set_property('foreground', self.grey)
         tag.set_property('background', self.black)
         tag.set_property('style', pango.STYLE_NORMAL)
         try:
@@ -312,9 +351,17 @@ class Prog(object):
             pass
 
 
-    def _quit(self, **args):
-        if gtk.events_pending:
+    def stayfresh(self):
+        """not required as gui updates are in gobjects, including this one, but makes things smoother"""
+        count = 5
+        while gtk.events_pending and count > 0:
+            count -= 1
             gtk.main_iteration()
+        return False
+
+
+    def _quit(self, **args):
+        gobject.idle_add(self.stayfresh)
         try:
             gtk.main_quit()
         except:

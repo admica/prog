@@ -15,17 +15,15 @@ human readable output should work. In the future I may add a counter for the num
 and a setting to enable/disable auto-close after subprocess completion. Some parameters are 
 configurable such as gui dimensions and scrollback history.
 
-Example Usage:
+Usage Examples:
 
-$ python prog.py rsync -avh --progress ~/Downloads/big.iso /nas/
+$ python prog.py ./gibberish.py
+
+$ python prog.py rsync -avh --progress ~/Downloads/file.iso /somepath/
 
 gibberish.py
 ============
 This is a test driver for prog.py. It prints random strings with random occurences of incrementing
 percentage completion text. It also randomly repeats between 1 and 3 cycles to simulate multiple
-progress bars running sequentially.
-
-Run it as the command argument to generate some output.
-
-$ python prog.py ./gibberish.py
+progress bars running sequentially. You can run it as the command argument of prog.py to generate output.
 
